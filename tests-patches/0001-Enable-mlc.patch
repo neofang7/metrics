@@ -1,0 +1,580 @@
+From 0320350e21cafe4b6ce16b751f3c2e6382f76de6 Mon Sep 17 00:00:00 2001
+From: Neo Fang <neo.fang@intel.com>
+Date: Tue, 19 Jul 2022 09:22:12 -0400
+Subject: [PATCH] Enable mlc
+
+---
+ .ci/run_metrics_PR_ci.sh    |   2 +
+ metrics/mlc/mlc_test.sh     | 125 ++++++++++++++++++
+ metrics/mlc/mlc_test_ctr.sh | 254 ++++++++++++++++++++++++++++++++++++
+ metrics/mlc/run_mlc.sh      | 125 ++++++++++++++++++
+ metrics/mlc/ubuntu.yaml     |  19 +++
+ 5 files changed, 525 insertions(+)
+ create mode 100755 metrics/mlc/mlc_test.sh
+ create mode 100755 metrics/mlc/mlc_test_ctr.sh
+ create mode 100755 metrics/mlc/run_mlc.sh
+ create mode 100644 metrics/mlc/ubuntu.yaml
+
+diff --git a/.ci/run_metrics_PR_ci.sh b/.ci/run_metrics_PR_ci.sh
+index b769d22..cbae819 100755
+--- a/.ci/run_metrics_PR_ci.sh
++++ b/.ci/run_metrics_PR_ci.sh
+@@ -28,6 +28,8 @@ init() {
+ run() {
+ 	pushd "$SCRIPT_DIR/../metrics"
+ 
++	mlc/mlc_test_ctr.sh 120
++
+ 	# Cloud hypervisor tests are being affected by kata-containers/kata-containers/issues/1488
+ 	if [ "${KATA_HYPERVISOR}" != "cloud-hypervisor" ]; then
+ 		# If KSM is available on this platform, let's run any tests that are
+diff --git a/metrics/mlc/mlc_test.sh b/metrics/mlc/mlc_test.sh
+new file mode 100755
+index 0000000..8704edd
+--- /dev/null
++++ b/metrics/mlc/mlc_test.sh
+@@ -0,0 +1,125 @@
++#!/bin/bash
++
++local_mlc=$1
++duration=$2
++guest_yaml=$3
++guest_mlc="/usr/bin/mlc"
++cpuset="0-6"
++
++declare -A cases
++cases["local_100R_BW"]="mlc --loaded_latency -t${duration} -d0 -R && wait"
++cases["local_3R1W_BW"]="mlc --loaded_latency -t${duration} -d0 -W3 && wait"
++
++check_pod_status() {
++    pod_name=$1
++    ret=0
++    cnt=0
++    while [ $cnt -lt 6 ]; do
++        status=`kubectl get pods | grep $pod_name | awk '{print $3}'`
++        if [[ "${status}" == "Running" ]]; then
++            ret=1
++            break
++        else
++            cnt=$cnt + 1
++            sleep 10
++        fi
++    done
++
++    echo $ret
++}
++
++create_pod() {
++    echo "$# $@"
++    pod_name=$1
++    yaml_file=$2
++
++    is_exist=`check_pod_status $pod_name`
++    echo "check $is_exist"
++
++    if [ $is_exist == 1 ];
++    then
++        echo "Pod $pod_name is already created."
++    else
++        kubectl create -f $yaml_file
++        check_pod_status $pod_name
++    fi
++
++    echo  "kubectl cp $local_mlc $pod_name:/usr/bin/"
++    #copy mlc to /usr/bin/
++    kubectl cp $local_mlc $pod_name:/usr/bin/
++}
++
++run_a_mlc_case() {
++    mlc_cmd=$1
++    
++    #echo "mlc cmd: ${mlc_cmd}"
++    sync
++    echo 3 > /proc/sys/vm/drop_caches
++    #echo "kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}""
++    output=$(kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}")
++    sleep 10
++    
++    echo ${output}
++}
++
++handle_mlc_output() {
++    output=$1
++    data=${output#*==========================}
++    data1=${data:1}
++    data2=$(echo $data1 | sed 's/\t/ /g')
++    IFS='[  \t]' read -r -a array <<< "$data2"
++    echo ${array[@]}
++}
++
++mlc_test() {
++    local_100R_BW="mlc --loaded_latency -t${duration} -d0 -R && wait"
++    output=$(run_a_mlc_case "$local_100R_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 100R BW: $data"
++
++    local_3R1W_BW="mlc --loaded_latency -t${duration} -d0 -W3 && wait"
++    output=$(run_a_mlc_case "$local_3R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 3R1W BW: $data"
++
++    local_2R1W_BW="mlc --loaded_latency -t${duration} -d0 -W2 && wait"
++    output=$(run_a_mlc_case "$local_2R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W BW: $data"
++
++    local_1R1W_BW="mlc --loaded_latency -t${duration} -d0 -W5 && wait"
++    output=$(run_a_mlc_case "$local_1R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W BW: $data"
++
++    local_2R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W7 && wait"
++    output=$(run_a_mlc_case "$local_2R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++
++    local_1R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W8 && wait"
++    output=$(run_a_mlc_case "$local_1R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W-NT BW: $data"
++
++    local_100WNT_BW="mlc --loaded_latency -t${duration} -d0 -W6 && wait"
++    output=$(run_a_mlc_case "$local_100WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++}
++
++main() {
++
++    if [ ! -f $guest_yaml ];
++    then
++        echo "$guest_yaml does not exist."
++        exit -1
++    fi
++
++    echo "Start guest tdx container..."
++    create_pod "ubuntu" $guest_yaml
++
++    mlc_test
++}
++
++main
+diff --git a/metrics/mlc/mlc_test_ctr.sh b/metrics/mlc/mlc_test_ctr.sh
+new file mode 100755
+index 0000000..5d4d7fe
+--- /dev/null
++++ b/metrics/mlc/mlc_test_ctr.sh
+@@ -0,0 +1,254 @@
++#!/bin/bash
++
++set -e
++
++# General env
++SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
++source "${SCRIPT_PATH}/../lib/common.bash"
++
++duration=$1
++cpuset="0-6"
++latency_core=7
++
++TEST_NAME="${TEST_NAME:-mlc}"
++PAYLOAD="mlc.tar"
++PAYLOAD_ARGS="${PAYLOAD_ARGS:-tail -f /dev/null}"
++PAYLOAD_RUNTIME_ARGS="${PAYLOAD_RUNTIME_ARGS:-5120}"
++PAYLOAD_SLEEP="${PAYLOAD_SLEEP:-10}"
++MAX_NUM_CONTAINERS="${MAX_NUM_CONTAINERS:-1}"
++MAX_MEMORY_CONSUMED="${MAX_MEMORY_CONSUMED:-32*1024*1024*1024}"
++MIN_MEMORY_FREE="${MIN_MEMORY_FREE:-2*1024*1024*1024}"
++DUMP_CACHES="${DUMP_CACHES:-1}"
++
++function preinstall() {
++    #check mlc image exist?
++    exist=$(ctr image ls | grep mlc)
++    if [ -z "${exist}" ]; then
++        ctr image import mlc.tar
++    fi
++}
++
++function run_a_mlc_case() {
++    mlc_cmd=$1
++    
++    #echo "mlc cmd: ${mlc_cmd}"
++    sync
++    echo 3 > /proc/sys/vm/drop_caches
++    #echo "kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}""
++    #output=$(kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}")
++    output=`ctr run --runtime io.containerd.run.kata.v2 --rm docker.io/library/mlc:v1 mlc /bin/bash -c "${mlc_cmd}"`
++    sleep 10
++    
++    echo ${output}
++}
++
++function handle_mlc_output() {
++    output=$1
++    data=${output#*==========================}
++    data1=${data:1}
++    data2=$(echo $data1 | sed 's/\t/ /g')
++    IFS='[  \t]' read -r -a array <<< "$data2"
++    echo ${array[@]}
++}
++
++save_config() {
++    metrics_json_start_array
++
++    local json="$(cat << EOF
++    {
++        "testname": "${TEST_NAME}",
++		"payload": "${PAYLOAD}",
++		"payload_args": "${PAYLOAD_ARGS}",
++		"payload_runtime_args": "${PAYLOAD_RUNTIME_ARGS}",
++		"payload_sleep": ${PAYLOAD_SLEEP},
++		"max_containers": ${MAX_NUM_CONTAINERS},
++		"max_memory_consumed": "${MAX_MEMORY_CONSUMED}",
++		"min_memory_free": "${MIN_MEMORY_FREE}",
++		"dump_caches": "${DUMP_CACHES}"
++    }
++EOF
++)"
++    metrics_json_add_array_element "$json"
++    metrics_json_end_array "Config"
++}
++
++function cleanup() {
++    metrics_json_save
++    clean_env_ctr
++}
++
++function mlc_test() {
++    restart_containerd_service
++    preinstall
++
++    init_env
++    metrics_json_init
++    save_config
++
++    #Start to test.
++    local_100R_BW="mlc --loaded_latency -t${duration} -d0 -R && wait"
++    output=$(run_a_mlc_case "$local_100R_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 100R BW: $data"
++    local_100R_BW=$(echo $data | awk '{print $3}')
++
++    local_3R1W_BW="mlc --loaded_latency -t${duration} -d0 -W3 && wait"
++    output=$(run_a_mlc_case "$local_3R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 3R1W BW: $data"
++    local_3R1W_BW=$(echo $data | awk '{print $3}')
++
++    local_2R1W_BW="mlc --loaded_latency -t${duration} -d0 -W2 && wait"
++    output=$(run_a_mlc_case "$local_2R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W BW: $data"
++    local_2R1W_BW=$(echo $data | awk '{print $3}')
++
++    local_1R1W_BW="mlc --loaded_latency -t${duration} -d0 -W5 && wait"
++    output=$(run_a_mlc_case "$local_1R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W BW: $data"
++    local_1R1W_BW=$(echo $data | awk '{print $3}')
++
++    local_2R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W7 && wait"
++    output=$(run_a_mlc_case "$local_2R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++    local_2R1WNT_BW=$(echo $data | awk '{print $3}')
++
++    local_1R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W8 && wait"
++    output=$(run_a_mlc_case "$local_1R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W-NT BW: $data"
++    local_1R1WNT_BW=$(echo $data | awk '{print $3}')
++
++    local_100WNT_BW="mlc --loaded_latency -t${duration} -d0 -W6 && wait"
++    output=$(run_a_mlc_case "$local_100WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++    local_100WNT_BW=$(echo $data | awk '{print $3}')
++
++    local_IDLE="mlc --idle_latency -b2g -t${duration} -c0 -j0 -l128"
++    output=$(run_a_mlc_case "$local_IDLE")
++    data=$(handle_mlc_output "${output}")
++    echo "Local Idle Latency: $data"
++    local_IDLE=$(echo $data | awk '{print $3}')
++
++    #remote testing
++    # Remote_100R_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -R &&wait"
++    # output=$(runc_a_mlc_case "$Remote_100R_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 100R BW: $data"
++    # Remote_100R_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_3R1W_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W3 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_3R1W_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 3R1W BW: $data"
++    # Remote_3R1W_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_2R1W_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W2 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_2R1W_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 2R1W BW: $data"
++    # Remote_2R1W_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_1R1W_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W5 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_1R1W_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 1R1W BW: $data"
++    # Remote_1R1W_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_2R1WNT_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W7 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_2R1WNT_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 2R1WNT BW: $data"
++    # Remote_2R1WNT_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_1R1WNT_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W8 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_1R1WNT_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 1R1WNT BW: $data"
++    # Remote_1R1WNT_BW=$(echo $data | awk '{print $3}')
++
++    # Remote_100WNT_BW="mlc --loaded_latency -k$cpuset -c$latency_core -j1 -d0 -t$duration -W6 &&wait"
++    # output=$(runc_a_mlc_case "$Remote_100WNT_BW")
++    # data=$(handle_mlc_output "${output}")
++    # echo "Remote 100WNT BW: $data"
++    # Remote_100WNT_BW=$(echo $data | awk '{print $3}')
++
++    metrics_json_start_array
++    #save result to json
++    local result_json="$(cat << EOF
++    {
++        "Local_100R_BW": {
++            "Result" : $local_100R_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_3R1W_BW": {
++            "Result" : $local_3R1W_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_2R1W_BW": {
++            "Result" : $local_2R1W_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_1R1W_BW": {
++            "Result" : $local_1R1W_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_2R1WNT_BW": {
++            "Result" : $local_2R1WNT_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_1R1WNT_BW": {
++            "Result" : $local_1R1WNT_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_100WNT_BW": {
++            "Result" : $local_100WNT_BW,
++            "Units"  : "MB/s"
++        }
++        "Local_Idle_Latency": {
++            "Result" : $local_IDLE,
++            "Units"  : "ns"
++        }
++
++        # "Remote_100R_BW": {
++        #     "Result" : $Remote_100R_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_3R1W_BW": {
++        #     "Result" : $Remote_3R1W_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_2R1W_BW": {
++        #     "Result" : $Remote_2R1W_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_1R1W_BW": {
++        #     "Result" : $Remote_1R1W_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_2R1WNT_BW": {
++        #     "Result" : $Remote_2R1WNT_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_1R1WNT_BW": {
++        #     "Result" : $Remote_1R1WNT_BW,
++        #     "Units"  : "MB/s"
++        # }
++        # "Remote_100WNT_BW": {
++        #     "Result" : $Remote_100WNT_BW,
++        #     "Units"  : "MB/s"
++        # }
++    }
++EOF
++)"
++    metrics_json_add_array_element "$result_json"
++    metrics_json_end_array "Result"
++    metrics_json_save
++    clean_env_ctr
++}
++
++mlc_test
+diff --git a/metrics/mlc/run_mlc.sh b/metrics/mlc/run_mlc.sh
+new file mode 100755
+index 0000000..8704edd
+--- /dev/null
++++ b/metrics/mlc/run_mlc.sh
+@@ -0,0 +1,125 @@
++#!/bin/bash
++
++local_mlc=$1
++duration=$2
++guest_yaml=$3
++guest_mlc="/usr/bin/mlc"
++cpuset="0-6"
++
++declare -A cases
++cases["local_100R_BW"]="mlc --loaded_latency -t${duration} -d0 -R && wait"
++cases["local_3R1W_BW"]="mlc --loaded_latency -t${duration} -d0 -W3 && wait"
++
++check_pod_status() {
++    pod_name=$1
++    ret=0
++    cnt=0
++    while [ $cnt -lt 6 ]; do
++        status=`kubectl get pods | grep $pod_name | awk '{print $3}'`
++        if [[ "${status}" == "Running" ]]; then
++            ret=1
++            break
++        else
++            cnt=$cnt + 1
++            sleep 10
++        fi
++    done
++
++    echo $ret
++}
++
++create_pod() {
++    echo "$# $@"
++    pod_name=$1
++    yaml_file=$2
++
++    is_exist=`check_pod_status $pod_name`
++    echo "check $is_exist"
++
++    if [ $is_exist == 1 ];
++    then
++        echo "Pod $pod_name is already created."
++    else
++        kubectl create -f $yaml_file
++        check_pod_status $pod_name
++    fi
++
++    echo  "kubectl cp $local_mlc $pod_name:/usr/bin/"
++    #copy mlc to /usr/bin/
++    kubectl cp $local_mlc $pod_name:/usr/bin/
++}
++
++run_a_mlc_case() {
++    mlc_cmd=$1
++    
++    #echo "mlc cmd: ${mlc_cmd}"
++    sync
++    echo 3 > /proc/sys/vm/drop_caches
++    #echo "kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}""
++    output=$(kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}")
++    sleep 10
++    
++    echo ${output}
++}
++
++handle_mlc_output() {
++    output=$1
++    data=${output#*==========================}
++    data1=${data:1}
++    data2=$(echo $data1 | sed 's/\t/ /g')
++    IFS='[  \t]' read -r -a array <<< "$data2"
++    echo ${array[@]}
++}
++
++mlc_test() {
++    local_100R_BW="mlc --loaded_latency -t${duration} -d0 -R && wait"
++    output=$(run_a_mlc_case "$local_100R_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 100R BW: $data"
++
++    local_3R1W_BW="mlc --loaded_latency -t${duration} -d0 -W3 && wait"
++    output=$(run_a_mlc_case "$local_3R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 3R1W BW: $data"
++
++    local_2R1W_BW="mlc --loaded_latency -t${duration} -d0 -W2 && wait"
++    output=$(run_a_mlc_case "$local_2R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W BW: $data"
++
++    local_1R1W_BW="mlc --loaded_latency -t${duration} -d0 -W5 && wait"
++    output=$(run_a_mlc_case "$local_1R1W_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W BW: $data"
++
++    local_2R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W7 && wait"
++    output=$(run_a_mlc_case "$local_2R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++
++    local_1R1WNT_BW="mlc --loaded_latency -t${duration} -d0 -W8 && wait"
++    output=$(run_a_mlc_case "$local_1R1WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 1R1W-NT BW: $data"
++
++    local_100WNT_BW="mlc --loaded_latency -t${duration} -d0 -W6 && wait"
++    output=$(run_a_mlc_case "$local_100WNT_BW")
++    data=$(handle_mlc_output "${output}")
++    echo "Local 2R1W-NT BW: $data"
++}
++
++main() {
++
++    if [ ! -f $guest_yaml ];
++    then
++        echo "$guest_yaml does not exist."
++        exit -1
++    fi
++
++    echo "Start guest tdx container..."
++    create_pod "ubuntu" $guest_yaml
++
++    mlc_test
++}
++
++main
+diff --git a/metrics/mlc/ubuntu.yaml b/metrics/mlc/ubuntu.yaml
+new file mode 100644
+index 0000000..43791c6
+--- /dev/null
++++ b/metrics/mlc/ubuntu.yaml
+@@ -0,0 +1,19 @@
++apiVersion: v1
++kind: Pod
++metadata:
++  name: ubuntu
++  namespace: default
++spec:
++  runtimeClassName: kata
++  containers:
++  - name: ubuntu
++    image: public.ecr.aws/ubuntu/ubuntu:latest
++    resources:
++      limits:
++        memory: "32Gi"
++        cpu: "8"
++      requests:
++        memory: "32Gi"
++        cpu: "8"
++    securityContext:
++      privileged: true
+-- 
+2.25.1
+
