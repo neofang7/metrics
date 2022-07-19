@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ubuntu
+  namespace: default
+spec:
+  runtimeClassName: kata
+  containers:
+  - name: ubuntu
+    image: public.ecr.aws/ubuntu/ubuntu:latest
+    resources:
+      limits:
+        memory: "32Gi"
+        cpu: "8"
+      requests:
+        memory: "32Gi"
+        cpu: "8"
+    securityContext:
+      privileged: true
