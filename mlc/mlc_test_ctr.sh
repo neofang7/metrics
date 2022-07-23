@@ -1,10 +1,10 @@
 #!/bin/bash
-
 set -e
 
 # General env
 SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
 source "${SCRIPT_PATH}/../lib/common.bash"
+source "./mlc_lib.sh"
 
 duration=$1
 cpuset="0-6"
@@ -21,55 +21,14 @@ MIN_MEMORY_FREE="${MIN_MEMORY_FREE:-2*1024*1024*1024}"
 DUMP_CACHES="${DUMP_CACHES:-1}"
 
 function preinstall() {
-    #check mlc image exist?
-    exist=$(ctr image ls | grep mlc)
-    if [ -z "${exist}" ]; then
-        ctr image import mlc.tar
-    fi
+    ctr_preinstall   
 }
 
 function run_a_mlc_case() {
     mlc_cmd=$1
-    
-    #echo "mlc cmd: ${mlc_cmd}"
-    sync
-    echo 3 > /proc/sys/vm/drop_caches
-    #echo "kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}""
-    #output=$(kubectl exec ubuntu -- /bin/bash -c "${mlc_cmd}")
-    output=`ctr run --runtime io.containerd.run.kata.v2 --rm docker.io/library/mlc:v1 mlc /bin/bash -c "${mlc_cmd}"`
-    sleep 10
+    output=$(ctr_run_a_mlc_case ${mlc_cmd})
     
     echo ${output}
-}
-
-function handle_mlc_output() {
-    output=$1
-    data=${output#*==========================}
-    data1=${data:1}
-    data2=$(echo $data1 | sed 's/\t/ /g')
-    IFS='[  \t]' read -r -a array <<< "$data2"
-    echo ${array[@]}
-}
-
-save_config() {
-    metrics_json_start_array
-
-    local json="$(cat << EOF
-    {
-        "testname": "${TEST_NAME}",
-		"payload": "${PAYLOAD}",
-		"payload_args": "${PAYLOAD_ARGS}",
-		"payload_runtime_args": "${PAYLOAD_RUNTIME_ARGS}",
-		"payload_sleep": ${PAYLOAD_SLEEP},
-		"max_containers": ${MAX_NUM_CONTAINERS},
-		"max_memory_consumed": "${MAX_MEMORY_CONSUMED}",
-		"min_memory_free": "${MIN_MEMORY_FREE}",
-		"dump_caches": "${DUMP_CACHES}"
-    }
-EOF
-)"
-    metrics_json_add_array_element "$json"
-    metrics_json_end_array "Config"
 }
 
 function cleanup() {
@@ -184,64 +143,36 @@ function mlc_test() {
         "Local_100R_BW": {
             "Result" : $local_100R_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_3R1W_BW": {
             "Result" : $local_3R1W_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_2R1W_BW": {
             "Result" : $local_2R1W_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_1R1W_BW": {
             "Result" : $local_1R1W_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_2R1WNT_BW": {
             "Result" : $local_2R1WNT_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_1R1WNT_BW": {
             "Result" : $local_1R1WNT_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_100WNT_BW": {
             "Result" : $local_100WNT_BW,
             "Units"  : "MB/s"
-        }
+        },
         "Local_Idle_Latency": {
             "Result" : $local_IDLE,
             "Units"  : "ns"
-        }
+        },
 
-        # "Remote_100R_BW": {
-        #     "Result" : $Remote_100R_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_3R1W_BW": {
-        #     "Result" : $Remote_3R1W_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_2R1W_BW": {
-        #     "Result" : $Remote_2R1W_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_1R1W_BW": {
-        #     "Result" : $Remote_1R1W_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_2R1WNT_BW": {
-        #     "Result" : $Remote_2R1WNT_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_1R1WNT_BW": {
-        #     "Result" : $Remote_1R1WNT_BW,
-        #     "Units"  : "MB/s"
-        # }
-        # "Remote_100WNT_BW": {
-        #     "Result" : $Remote_100WNT_BW,
-        #     "Units"  : "MB/s"
-        # }
     }
 EOF
 )"
