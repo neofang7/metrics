@@ -2,15 +2,15 @@
 set -e
 
 # General env
-#SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
-#source "${SCRIPT_PATH}/../lib/common.bash"
-source "./mlc_lib.sh"
+SCRIPT_PATH=$(dirname "$(readlink -f "$0")")
+source "${SCRIPT_PATH}/../lib/common.bash"
+source "${SCRIPT_PATH}/mlc_lib.sh"
 
 duration=$1
 cpuset="0-6"
 latency_core=7
 
-TEST_NAME="${TEST_NAME:-mlc}"
+TEST_NAME="${TEST_NAME:-mlc-full}"
 PAYLOAD="mlc.tar"
 PAYLOAD_ARGS="${PAYLOAD_ARGS:-tail -f /dev/null}"
 PAYLOAD_RUNTIME_ARGS="${PAYLOAD_RUNTIME_ARGS:-5120}"
@@ -119,91 +119,92 @@ function run_mlc_ctr() {
     peak_rw_2_1=$(echo $output1 | awk {'print $12'})
     peak_rw_1_1=$(echo $output1 | awk {'print $16'})
     peak_stream_traid=$(echo $output1 | awk {'print $19'})
+    echo "Peak: ${peak_all_reads} ${peak_rw_3_1} ${peak_rw_2_1} ${peak_rw_1_1} ${peak_stream_traid}"
 
     metrics_json_start_array
-    local result_json=$(cat << EOF
+    local result_json="$(cat << EOF
     {
-        "loaded_latency_R_ns": {
+        "latency_R_ns": {
             "Result" : $loaded_latency_R_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W2_ns": {
+        "latency_W2_ns": {
             "Result" : $loaded_latency_W2_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W3_ns": {
+        "latency_W3_ns": {
             "Result" : $loaded_latency_W3_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W5_ns": {
+        "latency_W5_ns": {
             "Result" : $loaded_latency_W5_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W6_ns": {
+        "latency_W6_ns": {
             "Result" : $loaded_latency_W6_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W7_ns": {
+        "latency_W7_ns": {
             "Result" : $loaded_latency_W7_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_W8_ns": {
+        "latency_W8_ns": {
             "Result" : $loaded_latency_W8_ns,
             "Units"  : "ns"
         },
-        "loaded_latency_R_bw": {
+        "latency_R_bw": {
             "Result" : $loaded_latency_R_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W2_bw": {
+        "latency_W2_bw": {
             "Result" : $loaded_latency_W2_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W3_bw": {
+        "latency_W3_bw": {
             "Result" : $loaded_latency_W3_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W5_bw": {
+        "latency_W5_bw": {
             "Result" : $loaded_latency_W5_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W6_bw": {
+        "latency_W6_bw": {
             "Result" : $loaded_latency_W6_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W7_bw": {
+        "latency_W7_bw": {
             "Result" : $loaded_latency_W7_bw,
             "Units"  : "MB/s"
         },
-        "loaded_latency_W8_bw": {
+        "latency_W8_bw": {
             "Result" : $loaded_latency_W8_bw,
             "Units"  : "MB/s"
         },
         "peak_all_reads": {
             "Result" : $peak_all_reads,
-            "Units"  : "ns"
+            "Units"  : "MB/s"
         },
         "peak_rw_3_1": {
             "Result" : $peak_rw_3_1,
-            "Units"  : "ns"
+            "Units"  : "MB/s"
         },
         "peak_rw_2_1": {
             "Result" : $peak_rw_2_1,
-            "Units"  : "ns"
+            "Units"  : "MB/s"
         },
         "peak_rw_1_1": {
             "Result" : $peak_rw_1_1,
-            "Units"  : "ns"
+            "Units"  : "MB/s"
         },
         "peak_stream_traid": {
             "Result" : $peak_stream_traid,
-            "Units"  : "ns"
+            "Units"  : "MB/s"
         }
     }
 EOF
 )"
     metrics_json_add_array_element "$result_json"
-    metrics_json_end_array "Result"
+    metrics_json_end_array "Results"
     metrics_json_save
     clean_env_ctr
 }
